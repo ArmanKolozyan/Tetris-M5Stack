@@ -9,7 +9,12 @@
 #define FIELD_HEIGHT 20
 #define FIELD_WIDTH 10
 
-uint8_t field[FIELD_WIDTH * FIELD_HEIGHT];
+struct tetromino {
+    uint8_t id;
+    uint8_t color;
+};
+struct tetromino empty_tetromino = {0, 0};
+struct tetromino field[FIELD_WIDTH * FIELD_HEIGHT];
 
 // 0 = > 0 degrees 1 = > 90 degrees 2 = > 180 degrees 3 = > 270 degrees
 uint8_t rotate(uint8_t x, uint8_t y, uint8_t rotation) // returns: which index in the rotated one relative to the original
@@ -225,7 +230,7 @@ uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tet
             uint8_t current_block = tetrominos[tetromino][rotated_piece_index];
             if (tetromino_x + block_x >= 0 && tetromino_x + block_x < FIELD_WIDTH) {
                 if (tetromino_y + block_y >= 0 && tetromino_y + block_y < FIELD_HEIGHT) {
-                    if (current_block != 0 && field[field_index] != 0)
+                    if (current_block != 0 && field[field_index].id)
                         return 0;
                 } else if (current_block != 0) {
                     return 0;
@@ -236,22 +241,6 @@ uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tet
         }
 
     return 1;
-}
-
-void setup() {
-    M5.begin();
-    M5.IMU.Init();
-    Serial.begin(115200);
-    Serial.flush();
-    EEPROM.begin(512);
-    M5.Lcd.fillScreen(black_color);
-    for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
-        for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
-            field[y * FIELD_WIDTH + x] = 0;
-        }
-    }
-    Serial.begin(115200);
-    Serial.flush();
 }
 
 #define MIN_TILT 0.15
@@ -299,6 +288,24 @@ uint8_t game_over = false;
 
 int score = 0;
 
+uint8_t current_id = 0;
+
+uint8_t generate_id(void) {
+    current_id++;
+    return current_id;
+}
+
+void setup() {
+    M5.begin();
+    M5.IMU.Init();
+    Serial.begin(115200);
+    Serial.flush();
+    EEPROM.begin(512);
+    M5.Lcd.fillScreen(black_color);
+    Serial.begin(115200);
+    Serial.flush();
+}
+
 void loop() {
     srand(time(NULL));
     M5.update(); // moet er gewoon standard staan
@@ -311,6 +318,12 @@ void loop() {
     current_y = 0;
     game_over = 0;
 
+    for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
+        for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
+            field[y * FIELD_WIDTH + x] = empty_tetromino;
+        }
+    }
+
     while (!game_over) {
         M5.update(); // moet er gewoon standard staan
         delay(10);
@@ -318,7 +331,6 @@ void loop() {
 
         M5.Imu.getAccelData(&acc_x, &acc_y, &acc_z);
         move_position(&current_x, &current_y, acc_x, acc_y, current_piece, &current_rotation);
-
         speed_counter++;
         if (SPEED <= speed_counter) {
             move_down = 1;
@@ -334,23 +346,29 @@ void loop() {
                     game_over = 1;
                     break;
                 }
-                for (uint8_t block_x = 0; block_x < 4; block_x++)
-                    for (uint8_t block_y = 0; block_y < 4; block_y++)
-                        if (tetrominos[current_piece][rotate(block_x, block_y, current_rotation)] != 0)
-                            field[(current_y + block_y) * FIELD_WIDTH + (current_x + block_x)] = tetrominos[current_piece][rotate(block_x, block_y, current_rotation)];
+
+                uint8_t id = generate_id();
+                for (int block_x = 0; block_x < 4; block_x++)
+                    for (int block_y = 0; block_y < 4; block_y++)
+                        if (tetrominos[current_piece][rotate(block_x, block_y, current_rotation)] != 0) {
+                            struct tetromino current_tetromino = {id, tetrominos[current_piece][rotate(block_x, block_y, current_rotation)]};
+                            field[(current_y + block_y) * FIELD_WIDTH + (current_x + block_x)] = current_tetromino;
+                        }
+
                 for (uint8_t block_y = 0; block_y < 4; block_y++) {
-                    if (current_y + block_y < FIELD_HEIGHT - 1) {
-                        uint8_t bLine = 1;
-                        for (uint8_t block_x = 1; block_x < FIELD_WIDTH; block_x++) {
-                            if (!field[(current_y + block_y) * FIELD_WIDTH + block_x]) {
-                                bLine = 0;
+                    if (current_y + block_y < FIELD_HEIGHT) {
+                        uint8_t line_cleared = 1;
+                        for (int block_x = 1; block_x < FIELD_WIDTH; block_x++) {
+                            if (!field[(current_y + block_y) * FIELD_WIDTH + block_x].id) {
+                                line_cleared = 0;
                             }
                         }
-                        if (bLine) {
+                        if (line_cleared) {
                             for (uint8_t block_x = 0; block_x < FIELD_WIDTH; block_x++) {
-                                for (uint8_t line_y = current_y + block_y; line_y >= 0; line_y--)
+                                for (int line_y = current_y + block_y; line_y >= 0; line_y--) {
                                     field[line_y * FIELD_WIDTH + block_x] = field[(line_y - 1) * FIELD_WIDTH + block_x];
-                                field[block_x] = 0;
+                                }
+                                field[block_x] = empty_tetromino;
                             }
                             SPEED--;
                             score += 150;
@@ -359,7 +377,7 @@ void loop() {
                 }
                 SPEED = 30;
                 score += 12;
-                current_piece = rand() % 7;
+                current_piece = 0;
                 current_rotation = 0; // deze vier beter in een struct game_state
                 current_x = FIELD_WIDTH / 2;
                 current_y = 0;
@@ -369,7 +387,7 @@ void loop() {
         // Draw Field
         for (uint8_t x = 0; x < FIELD_WIDTH; x++)
             for (uint8_t y = 0; y < FIELD_HEIGHT; y++)
-                M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(field[y * FIELD_WIDTH + x]));
+                M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(field[y * FIELD_WIDTH + x].color));
 
         // Draw Current Piece
         for (uint8_t block_x = 0; block_x < 4; block_x++)
@@ -390,7 +408,7 @@ void loop() {
     while (true) {
         M5.update();
         if (M5.BtnA.isPressed()) {
-            M5.Lcd.fillScreen(TFT_BLACK);
+            M5.Lcd.fillScreen(black_color);
             break;
         }
     }
