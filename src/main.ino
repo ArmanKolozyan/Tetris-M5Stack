@@ -9,7 +9,16 @@
 #define FIELD_HEIGHT 20
 #define FIELD_WIDTH 10
 
-uint8_t field[FIELD_WIDTH * FIELD_HEIGHT];
+struct tetromino {
+    uint8_t id;
+    uint8_t color;
+};
+struct tetromino empty_tetromino = {0, 0};
+struct tetromino field[FIELD_WIDTH * FIELD_HEIGHT];
+
+int total_counter = 0;
+boolean bomb_active = 0;
+boolean bomb_handled = 0;
 
 // 0 = > 0 degrees 1 = > 90 degrees 2 = > 180 degrees 3 = > 270 degrees
 uint8_t rotate(uint8_t x, uint8_t y, uint8_t rotation) // returns: which index in the rotated one relative to the original
@@ -51,7 +60,7 @@ uint8_t rotate(uint8_t x, uint8_t y, uint8_t rotation) // returns: which index i
     return rotated_index;
 }
 
-uint8_t tetrominos[7][16] =
+uint8_t tetrominos[8][16] =
     {
         {
             0,
@@ -178,7 +187,12 @@ uint8_t tetrominos[7][16] =
             0,
             0,
             0,
-        }};
+        },
+        {
+
+            8,
+        },
+};
 
 uint32_t black_color = M5.Lcd.color565(0, 0, 0);
 uint32_t purple_color = M5.Lcd.color565(128, 0, 128);
@@ -204,7 +218,7 @@ uint32_t give_color(uint8_t n) {
         color = TFT_CYAN;
         break;
     case 5:
-        color = TFT_DARKGREY;
+        color = TFT_MAGENTA;
         break;
     case 6:
         color = TFT_ORANGE;
@@ -212,22 +226,30 @@ uint32_t give_color(uint8_t n) {
     case 7:
         color = TFT_YELLOW;
         break;
+    case 8:
+        color = TFT_DARKGREY;
+        break;
     }
     return color;
 }
 
 uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tetromino_y) {
-    for (uint8_t block_x = 0; block_x < 4; block_x++)
-        for (uint8_t block_y = 0; block_y < 4; block_y++) {
+    for (uint8_t block_x = 0; block_x < (4 - 3 * bomb_active); block_x++)
+        for (uint8_t block_y = 0; block_y < (4 - 3 * bomb_active); block_y++) {
             uint8_t rotated_piece_index = rotate(block_x, block_y, rotation);
             uint8_t field_index = (tetromino_y + block_y) * FIELD_WIDTH + (tetromino_x + block_x);
 
             uint8_t current_block = tetrominos[tetromino][rotated_piece_index];
             if (tetromino_x + block_x >= 0 && tetromino_x + block_x < FIELD_WIDTH) {
                 if (tetromino_y + block_y >= 0 && tetromino_y + block_y < FIELD_HEIGHT) {
-                    if (current_block != 0 && field[field_index] != 0)
+                    if (current_block != 0 && field[field_index].id) {
+                        if (bomb_active)
+                            explode();
                         return 0;
+                    }
                 } else if (current_block != 0) {
+                    if (bomb_active)
+                        explode();
                     return 0;
                 }
             } else if (current_block != 0) {
@@ -238,27 +260,75 @@ uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tet
     return 1;
 }
 
-void setup() {
-    M5.begin();
-    M5.IMU.Init();
-    Serial.begin(115200);
-    Serial.flush();
-    EEPROM.begin(512);
-    M5.Lcd.fillScreen(black_color);
-    for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
-        for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
-            field[y * FIELD_WIDTH + x] = 0;
-        }
-    }
-    Serial.begin(115200);
-    Serial.flush();
-}
-
 #define MIN_TILT 0.15
 
 uint8_t SPEED = 10;
 uint8_t speed_counter = 0;
 uint8_t move_down;
+
+uint8_t current_piece = 2;
+uint8_t current_rotation = 0; // deze vier beter in een struct game_state
+int current_x = FIELD_WIDTH / 2;
+int current_y = 0;
+float acc_x = 0, acc_y = 0, acc_z = 0;
+uint8_t game_over = false;
+
+int score = 0;
+
+uint8_t current_id = 0;
+
+uint8_t generate_id(void) {
+    current_id++;
+    return current_id;
+}
+
+boolean is_line_full(int current_y, uint8_t block_y) {
+    uint8_t line_full = 1;
+    for (int block_x = 1; block_x < FIELD_WIDTH; block_x++) {
+        if (!field[(current_y + block_y) * FIELD_WIDTH + block_x].id) {
+            line_full = 0;
+        }
+    }
+    return line_full;
+}
+
+void clear_line(int current_y, uint8_t block_y) {
+    for (uint8_t block_x = 0; block_x < FIELD_WIDTH; block_x++) {
+        for (int line_y = current_y + block_y; line_y >= 0; line_y--) {
+            field[line_y * FIELD_WIDTH + block_x] = field[(line_y - 1) * FIELD_WIDTH + block_x];
+        }
+        field[block_x] = empty_tetromino;
+    }
+}
+
+void install_tetromino_in_field(uint8_t current_piece, uint8_t current_rotation) {
+    uint8_t id = generate_id();
+    for (int block_x = 0; block_x < 4; block_x++)
+        for (int block_y = 0; block_y < 4; block_y++)
+            if (tetrominos[current_piece][rotate(block_x, block_y, current_rotation)] != 0) {
+                struct tetromino current_tetromino = {id, tetrominos[current_piece][rotate(block_x, block_y, current_rotation)]};
+                field[(current_y + block_y) * FIELD_WIDTH + (current_x + block_x)] = current_tetromino;
+            }
+}
+
+void handle_full_lines(int current_y) {
+    for (uint8_t block_y = 0; block_y < 4; block_y++) {
+        if (current_y + block_y < FIELD_HEIGHT) {
+            if (is_line_full(current_y, block_y)) {
+                clear_line(current_y, block_y);
+                SPEED--;
+                score += 150;
+            }
+        }
+    }
+}
+
+void bring_down(int x, int y) { // gebruik die ook in clear_line
+    for (int line_y = y; line_y >= 0; line_y--) {
+        field[line_y * FIELD_WIDTH + x] = field[(line_y - 1) * FIELD_WIDTH + x];
+    }
+    field[x] = empty_tetromino;
+}
 
 void move_position(int *x, int *y, float acc_x, float acc_y, uint8_t current_piece, uint8_t *current_rotation) {
     if (acc_x > MIN_TILT) {
@@ -283,21 +353,44 @@ void move_position(int *x, int *y, float acc_x, float acc_y, uint8_t current_pie
         //  delay(50);
     }
 
-    if (M5.BtnA.wasPressed()) {
+    if (M5.BtnA.wasPressed() && !bomb_active) {
         if (piece_fits(current_piece, *current_rotation + 1, *x, *y)) {
             (*current_rotation)++;
         }
     }
 }
 
-uint8_t current_piece = 2;
-uint8_t current_rotation = 0; // deze vier beter in een struct game_state
-int current_x = FIELD_WIDTH / 2;
-int current_y = 0;
-float acc_x = 0, acc_y = 0, acc_z = 0;
-uint8_t game_over = false;
+void setup() {
+    M5.begin();
+    M5.IMU.Init();
+    Serial.begin(115200);
+    Serial.flush();
+    EEPROM.begin(512);
+    M5.Lcd.fillScreen(black_color);
+    Serial.begin(115200);
+    Serial.flush();
+}
 
-int score = 0;
+void explode() {
+
+    for (int off_y = -1; off_y <= 1; off_y++) {
+        for (int off_x = -1; off_x <= 1; off_x++) { // checking all the neighbours of the bomb
+            int neighbour_y = current_y + off_y;
+            int neighbour_x = current_x + off_x;
+            if ((neighbour_y < 0) || (neighbour_y >= FIELD_HEIGHT)) { // checking if we are not off the field
+                continue;
+            }
+            if ((neighbour_x < 0) || (neighbour_x >= FIELD_WIDTH)) { // checking if we are not off the field
+                continue;
+            }
+            {
+                struct tetromino neighbour = field[neighbour_y * FIELD_WIDTH + neighbour_x];
+                bomb_handled = true;
+                bring_down(neighbour_x, neighbour_y);
+            }
+        }
+    }
+}
 
 void loop() {
     srand(time(NULL));
@@ -311,6 +404,12 @@ void loop() {
     current_y = 0;
     game_over = 0;
 
+    for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
+        for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
+            field[y * FIELD_WIDTH + x] = empty_tetromino;
+        }
+    }
+
     while (!game_over) {
         M5.update(); // moet er gewoon standard staan
         delay(10);
@@ -318,7 +417,6 @@ void loop() {
 
         M5.Imu.getAccelData(&acc_x, &acc_y, &acc_z);
         move_position(&current_x, &current_y, acc_x, acc_y, current_piece, &current_rotation);
-
         speed_counter++;
         if (SPEED <= speed_counter) {
             move_down = 1;
@@ -326,7 +424,22 @@ void loop() {
 
         if (move_down) {
             speed_counter = 0;
-            if (piece_fits(current_piece, current_rotation, current_x, current_y + 1)) {
+            if (bomb_active) {
+                boolean does_piece_fit = piece_fits(current_piece, current_rotation, current_x, current_y + 1);
+
+                if (bomb_handled) {
+                    SPEED = 30;
+                    score += 12;
+                    current_piece = rand() % 7; // weer random maken
+                    current_rotation = 0;       // deze vier beter in een struct game_state
+                    current_x = FIELD_WIDTH / 2;
+                    current_y = 0;
+                    bomb_handled = false;
+                    bomb_active = false;
+                } else if (piece_fits(current_piece, current_rotation, current_x, current_y + 1)) {
+                    current_y++;
+                }
+            } else if (piece_fits(current_piece, current_rotation, current_x, current_y + 1)) {
                 current_y++;
             } else {
 
@@ -334,32 +447,18 @@ void loop() {
                     game_over = 1;
                     break;
                 }
-                for (uint8_t block_x = 0; block_x < 4; block_x++)
-                    for (uint8_t block_y = 0; block_y < 4; block_y++)
-                        if (tetrominos[current_piece][rotate(block_x, block_y, current_rotation)] != 0)
-                            field[(current_y + block_y) * FIELD_WIDTH + (current_x + block_x)] = tetrominos[current_piece][rotate(block_x, block_y, current_rotation)];
-                for (uint8_t block_y = 0; block_y < 4; block_y++) {
-                    if (current_y + block_y < FIELD_HEIGHT - 1) {
-                        uint8_t bLine = 1;
-                        for (uint8_t block_x = 1; block_x < FIELD_WIDTH; block_x++) {
-                            if (!field[(current_y + block_y) * FIELD_WIDTH + block_x]) {
-                                bLine = 0;
-                            }
-                        }
-                        if (bLine) {
-                            for (uint8_t block_x = 0; block_x < FIELD_WIDTH; block_x++) {
-                                for (uint8_t line_y = current_y + block_y; line_y >= 0; line_y--)
-                                    field[line_y * FIELD_WIDTH + block_x] = field[(line_y - 1) * FIELD_WIDTH + block_x];
-                                field[block_x] = 0;
-                            }
-                            SPEED--;
-                            score += 150;
-                        }
-                    }
-                }
+
+                install_tetromino_in_field(current_piece, current_rotation);
+                handle_full_lines(current_y);
+
                 SPEED = 30;
                 score += 12;
-                current_piece = rand() % 7;
+                current_piece = rand() % 7;     // weer random maken
+                if ((total_counter % 2) == 0) { // counter verhogen
+                    current_piece = 7;
+                    bomb_active = true;
+                }
+                total_counter++;
                 current_rotation = 0; // deze vier beter in een struct game_state
                 current_x = FIELD_WIDTH / 2;
                 current_y = 0;
@@ -369,7 +468,7 @@ void loop() {
         // Draw Field
         for (uint8_t x = 0; x < FIELD_WIDTH; x++)
             for (uint8_t y = 0; y < FIELD_HEIGHT; y++)
-                M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(field[y * FIELD_WIDTH + x]));
+                M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(field[y * FIELD_WIDTH + x].color));
 
         // Draw Current Piece
         for (uint8_t block_x = 0; block_x < 4; block_x++)
@@ -390,7 +489,7 @@ void loop() {
     while (true) {
         M5.update();
         if (M5.BtnA.isPressed()) {
-            M5.Lcd.fillScreen(TFT_BLACK);
+            M5.Lcd.fillScreen(black_color);
             break;
         }
     }
