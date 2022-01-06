@@ -13,10 +13,64 @@ enum Game_mode {
     mines_and_blocks
 };
 
+#define DISPLAY_HEIGHT 160
+#define DISPLAY_WIDTH 80
+
+#define FIELD_HEIGHT 20
+#define FIELD_WIDTH 10
+
+#define MIN_TILT 0.15
+
+struct timed_block {
+    uint8_t active;
+    uint8_t limit;
+};
+
+struct accelerometer_data {
+    float x = 0;
+    float y = 0;
+    float z = 0;
+};
+
 struct saved_piece_data {
     int id;
     uint8_t color;
     uint8_t blocks_left;
+};
+
+struct tetromino {
+    uint8_t *data;
+    uint8_t length;
+    uint8_t total_blocks;
+    uint8_t color;
+};
+
+struct tetromino_state {
+    uint8_t id = 0;
+    int row_in_field = 0;
+    int column_in_field = 0;
+    uint8_t rotation = 0;
+    struct tetromino *tetromino;
+};
+
+struct game_state {
+    struct double_node *board[FIELD_WIDTH * FIELD_HEIGHT];
+
+    uint8_t SPEED = 30;
+    uint8_t speed_counter = 0;
+    uint8_t move_down = 0;
+    uint8_t current_id = 0;
+    uint8_t bomb_active = 0;
+    uint8_t bomb_handled = 0;
+
+    struct tetromino_state tetromino_state;
+
+    struct timed_block timed_block;
+
+    struct double_node *active_pieces;
+
+    int score;
+    uint8_t game_over;
 };
 
 typedef struct double_node {
@@ -84,26 +138,7 @@ Double_Node *delete_node(int id, Double_Node *start) {
     return start;
 }
 
-#define DISPLAY_HEIGHT 160
-#define DISPLAY_WIDTH 80
-
-#define FIELD_HEIGHT 20
-#define FIELD_WIDTH 10
-
-#define MIN_TILT 0.15
-
-struct timed_block {
-    uint8_t active;
-    uint8_t limit;
-};
-
-struct accelerometer_data {
-};
-
-float acc_x = 0,
-      acc_y = 0, acc_z = 0;
-
-struct double_node *board_get(struct double_node **values, uint8_t width, int row, int col) { // betere naam geven want niet altijd tetromino
+struct double_node *board_get(struct double_node **values, uint8_t width, int row, int col) {
     int index = row * width + col;
     return values[index];
 }
@@ -154,57 +189,22 @@ uint8_t TETROMINO_8[] = {
 uint8_t TETROMINO_9[] = {
     9};
 
-struct tetromino {
-    uint8_t *data;
-    uint8_t length;
-    uint8_t total_blocks;
-};
-
 struct tetromino TETROMINOS[] = {
-    {TETROMINO_1, 4, 4}, // misschien de lengte met een functie berekenen?
-    {TETROMINO_2, 2, 4},
-    {TETROMINO_3, 3, 4},
-    {TETROMINO_4, 3, 4},
-    {TETROMINO_5, 3, 4},
-    {TETROMINO_6, 3, 4},
-    {TETROMINO_7, 3, 4},
-    {TETROMINO_8, 1, 1},
-    {TETROMINO_9, 1, 1}};
-
-struct tetromino_state {
-    uint8_t id = 0;
-    uint8_t tetromino_index = 0;
-    int offset_row = 0;
-    int offset_col = 0;
-    uint8_t rotation = 0;
-};
-
-struct game_state {
-    struct double_node *board[FIELD_WIDTH * FIELD_HEIGHT];
-    uint8_t lines[FIELD_HEIGHT];
-
-    uint8_t SPEED = 30;
-    uint8_t speed_counter = 0;
-    uint8_t move_down = 0;
-    uint8_t current_id = 0;
-    uint8_t bomb_active = 0;
-    uint8_t bomb_handled = 0;
-
-    struct tetromino_state tetromino_state;
-
-    struct timed_block timed_block;
-
-    struct double_node *active_pieces;
-
-    int score;
-    uint8_t game_over;
-};
+    {TETROMINO_1, 4, 4, 1}, // misschien de lengte met een functie berekenen?
+    {TETROMINO_2, 2, 4, 2},
+    {TETROMINO_3, 3, 4, 3},
+    {TETROMINO_4, 3, 4, 4},
+    {TETROMINO_5, 3, 4, 5},
+    {TETROMINO_6, 3, 4, 6},
+    {TETROMINO_7, 3, 4, 7},
+    {TETROMINO_8, 1, 1, 8},
+    {TETROMINO_9, 1, 1, 9}};
 
 // de explodes moet hier weg, in een andere functie zetten!!!
 // de argumenten van deze functie algemener maken!!!
 uint8_t piece_fits(struct tetromino_state tetromino_state, struct game_state *game_state, uint8_t width, uint8_t height) {
 
-    struct tetromino *tetromino = TETROMINOS + game_state->tetromino_state.tetromino_index;
+    struct tetromino *tetromino = game_state->tetromino_state.tetromino;
 
     for (int row = 0;
          row < tetromino->length;
@@ -214,8 +214,8 @@ uint8_t piece_fits(struct tetromino_state tetromino_state, struct game_state *ga
              ++col) {
             uint8_t tetromino_value = tetromino_get(tetromino, row, col, tetromino_state.rotation);
             if (tetromino_value > 0) {
-                int board_row = tetromino_state.offset_row + row;
-                int board_col = tetromino_state.offset_col + col;
+                int board_row = tetromino_state.row_in_field + row;
+                int board_col = tetromino_state.column_in_field + col;
                 uint8_t field_value;
                 if (board_col >= 0 && board_col < FIELD_WIDTH) {
                     if (board_row >= 0 && board_row < FIELD_HEIGHT) {
@@ -226,12 +226,12 @@ uint8_t piece_fits(struct tetromino_state tetromino_state, struct game_state *ga
                         };
                         if (field_value) {
                             if (game_state->bomb_active && !game_state->bomb_handled) {
-                                explode(game_state, game_state->tetromino_state.offset_col, game_state->tetromino_state.offset_row);
+                                explode(game_state, game_state->tetromino_state.column_in_field, game_state->tetromino_state.row_in_field);
                             }
                             return 0;
                         }
                     } else if (game_state->bomb_active && !game_state->bomb_handled) {
-                        explode(game_state, game_state->tetromino_state.offset_col, game_state->tetromino_state.offset_row); // - 1 to revert position
+                        explode(game_state, game_state->tetromino_state.column_in_field, game_state->tetromino_state.row_in_field); // - 1 to revert position
                         return 0;
                     } else {
                         return 0;
@@ -262,7 +262,7 @@ uint8_t tetromino_get(struct tetromino *tetromino, int row, int col, uint8_t rot
 }
 
 void install_tetromino_in_field(struct game_state *game) {
-    struct tetromino *tetromino = TETROMINOS + game->tetromino_state.tetromino_index;
+    struct tetromino *tetromino = game->tetromino_state.tetromino;
     for (uint8_t row = 0;
          row < tetromino->length;
          ++row) {
@@ -271,8 +271,8 @@ void install_tetromino_in_field(struct game_state *game) {
              ++col) {
             uint8_t value = tetromino_get(tetromino, row, col, game->tetromino_state.rotation);
             if (value) {
-                int board_row = game->tetromino_state.offset_row + row;
-                int board_col = game->tetromino_state.offset_col + col;
+                int board_row = game->tetromino_state.row_in_field + row;
+                int board_col = game->tetromino_state.column_in_field + col;
                 double_node *mynode = game->active_pieces;
                 board_set(game->board, FIELD_WIDTH, board_row, board_col, mynode);
             }
@@ -280,18 +280,18 @@ void install_tetromino_in_field(struct game_state *game) {
     }
 }
 
-void move_position(struct game_state *game_state, float acc_x, float acc_y) {
-    tetromino_state tetromino = game_state->tetromino_state;
-    if (acc_x > MIN_TILT) {
-        tetromino.offset_col -= 1;
+void move_position(struct game_state *game_state, accelerometer_data accelerometer_data) {
+    tetromino_state tetromino = game_state->tetromino_state; // dynamisch alloceren om geheugen te besparen!!! (vraag aan assistent)
+    if (accelerometer_data.x > MIN_TILT) {
+        tetromino.column_in_field -= 1;
         delay(100);
-    } else if (acc_x < -MIN_TILT) {
-        tetromino.offset_col += 1;
+    } else if (accelerometer_data.x < -MIN_TILT) {
+        tetromino.column_in_field += 1;
         delay(100);
     }
-    if (acc_y > 0.95) {
+    if (accelerometer_data.y > 0.95) {
         game_state->speed_counter = game_state->speed_counter + 10;
-    } else if (acc_y < -0.50) {
+    } else if (accelerometer_data.y < -0.50) {
         if (game_state->speed_counter > 0) {
             game_state->speed_counter--;
         }
@@ -353,7 +353,7 @@ uint32_t give_color(uint8_t n) {
 
 uint8_t possible_to_lower(struct game_state *game_state) {
     tetromino_state tetromino = game_state->tetromino_state;
-    tetromino.offset_row += 1;
+    tetromino.row_in_field += 1;
     return (piece_fits(tetromino, game_state, FIELD_WIDTH, FIELD_HEIGHT));
 }
 
@@ -387,7 +387,7 @@ void explode(struct game_state *game_state, int bomb_x, int bomb_y) { // bomb-di
                     }
                     if (board_get(game_state->board, FIELD_WIDTH, neighbour_y, neighbour_x)->value.blocks_left == 0) {
                         game_state->score += 50;
-                        delete_node(board_get(game_state->board, FIELD_WIDTH, neighbour_y, neighbour_x)->value.id, game_state->active_pieces); //board_set gebruiken en misschien moet dit niet eens hier staan??
+                        delete_node(board_get(game_state->board, FIELD_WIDTH, neighbour_y, neighbour_x)->value.id, game_state->active_pieces); // board_set gebruiken en misschien moet dit niet eens hier staan??
                     }
                     bring_down(game_state->board, neighbour_x, neighbour_y);
                 }
@@ -416,13 +416,16 @@ uint8_t random_int(uint8_t min, uint8_t max) {
 
 void spawn_piece(struct game_state *game) {
     game->current_id++;
-    game->tetromino_state.tetromino_index = (uint8_t)random_int(0, 7);
-    if ((game->current_id % 4) == 0) {             // counter verhogen
-        game->tetromino_state.tetromino_index = 7; // ECHT random maken!
+    uint8_t index = (uint8_t)random_int(0, 7);
+    game->tetromino_state.tetromino = &TETROMINOS[index];
+    if ((game->current_id % 4) == 0) {                    // counter verhogen
+        game->tetromino_state.tetromino = &TETROMINOS[7]; // ECHT random maken!
         game->bomb_active = 1;
     }
-    if (((game->current_id % 5) == 0) && !game->bomb_active && !game->timed_block.active) { // counter verhogen
-        game->tetromino_state.tetromino_index = 8;                                          // CONSTANTEN WEGWERKEN!
+    if (((game->current_id % 2) == 0) && !game->bomb_active && !game->timed_block.active) { // counter verhogen
+
+        Serial.printf("helo kiyyy");
+        game->tetromino_state.tetromino = &TETROMINOS[8]; // CONSTANTEN WEGWERKEN!
         game->timed_block.active = 1;
         game->timed_block.limit = 100;
     }
@@ -432,13 +435,13 @@ void spawn_piece(struct game_state *game) {
         }
         game->timed_block.limit--;
     }
-    game->tetromino_state.offset_row = 0;
-    game->tetromino_state.offset_col = FIELD_WIDTH / 2;
+    game->tetromino_state.row_in_field = 0;
+    game->tetromino_state.column_in_field = FIELD_WIDTH / 2;
     game->tetromino_state.rotation = 0;
     game->SPEED = 30;
 
     if (!game->bomb_active) {
-        struct saved_piece_data value = {.id = game->current_id, .color = game->tetromino_state.tetromino_index + 1, .blocks_left = TETROMINOS[game->tetromino_state.tetromino_index].total_blocks};
+        struct saved_piece_data value = {.id = game->current_id, .color = game->tetromino_state.tetromino->color, .blocks_left = game->tetromino_state.tetromino->total_blocks};
         game->active_pieces = insert_before(value, game->active_pieces);
     }
 }
@@ -476,9 +479,9 @@ void clear_line(game_state *game_state, int y) {
 
 void handle_full_lines(struct game_state *game_state) {
     for (uint8_t block_y = 0; block_y < 4; block_y++) {
-        if (game_state->tetromino_state.offset_row + block_y < FIELD_HEIGHT) {
-            if (is_line_full(game_state->board, game_state->tetromino_state.offset_row + block_y)) {
-                clear_line(game_state, game_state->tetromino_state.offset_row + block_y);
+        if (game_state->tetromino_state.row_in_field + block_y < FIELD_HEIGHT) {
+            if (is_line_full(game_state->board, game_state->tetromino_state.row_in_field + block_y)) {
+                clear_line(game_state, game_state->tetromino_state.row_in_field + block_y);
                 game_state->SPEED--;
                 game_state->score += 150;
             }
@@ -492,11 +495,13 @@ void loop() {
     srand(time(NULL));
     M5.update(); // moet er gewoon standard staan
     delay(20);
+    struct accelerometer_data accelerometer_data;
 
     struct game_state game_state;
 
     game_state.current_id = 0;
     game_state.tetromino_state.id = 0;
+    game.timed_block.active = 0;
 
     for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
         for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
@@ -505,20 +510,20 @@ void loop() {
     }
 
     game_state.current_id++;
-    game_state.tetromino_state.tetromino_index = (uint8_t)random_int(0, 7);
-    game_state.tetromino_state.offset_row = 0;
-    game_state.tetromino_state.offset_col = FIELD_WIDTH / 2;
+    game_state.tetromino_state.tetromino = &TETROMINOS[(uint8_t)random_int(0, 7)];
+    game_state.tetromino_state.row_in_field = 0;
+    game_state.tetromino_state.column_in_field = FIELD_WIDTH / 2;
     game_state.tetromino_state.rotation = 0;
     game_state.SPEED = 30;
-    struct saved_piece_data first_value = {.id = 1, .color = game_state.tetromino_state.tetromino_index + 1, .blocks_left = TETROMINOS[game_state.tetromino_state.tetromino_index].total_blocks};
+    struct saved_piece_data first_value = {.id = 1, .color = game_state.tetromino_state.tetromino->color, .blocks_left = game_state.tetromino_state.tetromino->total_blocks};
     struct double_node *first_node = insert_before(first_value, NULL);
     game_state.active_pieces = first_node;
 
     while (!game_state.game_over) {
         M5.update(); // moet er gewoon standard staan
         delay(10);
-        M5.Imu.getAccelData(&acc_x, &acc_y, &acc_z);
-        move_position(&game_state, acc_x, acc_y);
+        M5.Imu.getAccelData(&accelerometer_data.x, &accelerometer_data.y, &accelerometer_data.z);
+        move_position(&game_state, accelerometer_data);
         game_state.speed_counter++;
         if (game_state.speed_counter > game_state.SPEED) {
             game_state.move_down = 1;
@@ -533,12 +538,12 @@ void loop() {
                     spawn_piece(&game_state);
                     game_state.bomb_handled = 0;
                 } else if (possible_to_lower(&game_state)) {
-                    game_state.tetromino_state.offset_row++;
+                    game_state.tetromino_state.row_in_field++;
                 } else {
-                    explode(&game_state, game_state.tetromino_state.offset_col, game_state.tetromino_state.offset_row); // - 1 to revert position
+                    explode(&game_state, game_state.tetromino_state.column_in_field, game_state.tetromino_state.row_in_field); // - 1 to revert position
                 }
             } else if (possible_to_lower(&game_state)) {
-                game_state.tetromino_state.offset_row++;
+                game_state.tetromino_state.row_in_field++;
             } else {
                 if (!piece_fits(game_state.tetromino_state, &game_state, FIELD_WIDTH, FIELD_HEIGHT)) {
                     game_state.game_over = 1;
@@ -561,13 +566,13 @@ void loop() {
             }
 
         // Draw Current Piece
-        struct tetromino *tetromino = TETROMINOS + game_state.tetromino_state.tetromino_index;
+        struct tetromino *tetromino = game_state.tetromino_state.tetromino;
         for (uint8_t block_x = 0; block_x < tetromino->length; block_x++)
             for (uint8_t block_y = 0; block_y < tetromino->length; block_y++) {
                 uint8_t value = tetromino_get(tetromino, block_y, block_x, game_state.tetromino_state.rotation);
                 if (value) // binnen 1 piece geen 2D array, je houdt wel een 2D array bij van pieces
                 {
-                    M5.Lcd.fillRect((game_state.tetromino_state.offset_col + block_x) * 8, (game_state.tetromino_state.offset_row + block_y) * 8, 8, 8, give_color(value));
+                    M5.Lcd.fillRect((game_state.tetromino_state.column_in_field + block_x) * 8, (game_state.tetromino_state.row_in_field + block_y) * 8, 8, 8, give_color(value));
                 }
             }
     }
