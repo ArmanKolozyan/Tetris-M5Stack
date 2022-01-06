@@ -3,196 +3,373 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+
+struct saved_piece_data {
+    uint8_t index;
+    uint8_t blocks_left;
+}
+
+
+typedef struct double_node {
+	struct saved_piece_data value;
+	struct double_node *prev;
+	struct double_node *next;
+} Double_Node;
+
+Double_Node *insert_before(int value, Double_Node *q) {
+	Double_Node *p = malloc(sizeof(Double_Node));
+	p->value = value;
+	p->next = q;
+	if (q != NULL) {
+		Double_Node *prev_node = q->prev;
+		q->prev = p;
+		p->prev = prev_node;
+		if (prev_node != NULL) {
+			prev_node->next = p;
+		}
+	} else {
+		p->prev = NULL;
+	}
+	return p;
+}
+
+Double_Node *insert_after(int value, Double_Node *q) {
+	Double_Node *p = malloc(sizeof(Double_Node));
+	p->value = value;
+	p->prev = q;
+	if (q != NULL) {
+		Double_Node *next = q->next;
+		q->next = p;
+		p->next = next;
+		if (next != NULL) {
+			next->prev = p;
+		}
+	} else {
+		p->next = NULL;
+	}
+	return p;
+}
+
+Double_Node *delete_node(int key, Double_Node *start) {
+	Double_Node *p;
+	p = start;
+	while (p != NULL && (p->value != key)) {
+		p = p->next;
+	}
+	if (p != NULL) {
+		Double_Node *next = p->next;
+		Double_Node *prev = p->prev;
+		if (prev != NULL) {
+			prev->next = next;
+			if (next != NULL) {
+				next->prev = prev;
+			}
+		} else {
+			start = p->next;
+			if (next != NULL) {
+				next->prev = NULL;
+			}
+		}
+		free(p);
+	}
+	return start;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #define DISPLAY_HEIGHT 160
 #define DISPLAY_WIDTH 80
 
 #define FIELD_HEIGHT 20
 #define FIELD_WIDTH 10
 
-struct tetromino {
-    uint8_t id;
-    uint8_t color;
+#define MIN_TILT 0.15
+
+struct timed_block {
+    boolean active;
+    uint8_t limit;
 };
-struct tetromino empty_tetromino = {0, 0};
-struct tetromino field[FIELD_WIDTH * FIELD_HEIGHT];
 
-int total_counter = 0;
-boolean bomb_active = 0;
-boolean bomb_handled = 0;
+float acc_x = 0,
+      acc_y = 0, acc_z = 0;
 
-// 0 = > 0 degrees 1 = > 90 degrees 2 = > 180 degrees 3 = > 270 degrees
-uint8_t rotate(uint8_t x, uint8_t y, uint8_t rotation) // returns: which index in the rotated one relative to the original
-{
-    uint8_t rotated_index = 0;
-    switch (rotation % 4) {
-    case 0:
-        rotated_index = y * 4 + x;
-        break;
-        // 0  1  2  3
-        // 4  5  6  7
-        // 8  9 10 11
-        // 12 13 14 15
-
-    case 1:
-        rotated_index = 12 + y - (x * 4);
-        break;
-        // 12  8  4  0
-        //  13  9  5  1
-        //  14 10  6  2
-        //  15 11  7  3
-
-    case 2:
-        rotated_index = 15 - (y * 4) - x;
-        break;
-        // 15 14 13 12
-        //  11 10  9  8
-        //  7  6  5  4
-        //  3  2  1  0
-
-    case 3:
-        rotated_index = 3 - y + (x * 4);
-        break;
-        // 3  7 11 15
-        // 2  6 10 14
-        // 1  5  9 13
-        // 0  4  8 12
-    }
-    return rotated_index;
+uint8_t board_get(uint8_t *values, uint8_t width, int row, int col) { // betere naam geven want niet altijd tetromino
+    int index = row * width + col;
+    return values[index];
 }
 
-uint8_t tetrominos[8][16] =
-    {
-        {
-            0,
-            0,
-            1,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            0,
-            1,
-            0,
-        },
-        {
-            0,
-            0,
-            2,
-            0,
-            0,
-            2,
-            2,
-            0,
-            0,
-            2,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        },
-        {
-            0,
-            3,
-            0,
-            0,
-            0,
-            3,
-            3,
-            0,
-            0,
-            0,
-            3,
-            0,
-            0,
-            0,
-            0,
-            0,
-        },
-        {
-            0,
-            0,
-            0,
-            0,
-            0,
-            4,
-            4,
-            0,
-            0,
-            4,
-            4,
-            0,
-            0,
-            0,
-            0,
-            0,
-        },
-        {
-            0,
-            0,
-            5,
-            0,
-            0,
-            5,
-            5,
-            0,
-            0,
-            0,
-            5,
-            0,
-            0,
-            0,
-            0,
-            0,
-        },
-        {
-            0,
-            6,
-            0,
-            0,
-            0,
-            6,
-            0,
-            0,
-            0,
-            6,
-            6,
-            0,
-            0,
-            0,
-            0,
-            0,
-        },
-        {
-            0,
-            0,
-            7,
-            0,
-            0,
-            0,
-            7,
-            0,
-            0,
-            7,
-            7,
-            0,
-            0,
-            0,
-            0,
-            0,
-        },
-        {
+void board_set(uint8_t *values, uint8_t width, int row, int col, uint8_t value) {
+    int index = row * width + col;
+    values[index] = value;
+}
 
-            8,
-        },
+uint8_t TETROMINO_1[] = {
+    0, 0, 0, 0,
+    1, 1, 1, 1,
+    0, 0, 0, 0,
+    0, 0, 0, 0};
+
+uint8_t TETROMINO_2[] = {
+    2, 2,
+    2, 2};
+
+uint8_t TETROMINO_3[] = {
+    0, 0, 0,
+    3, 3, 3,
+    0, 3, 0};
+
+uint8_t TETROMINO_4[] = {
+    0, 4, 4,
+    4, 4, 0,
+    0, 0, 0};
+
+uint8_t TETROMINO_5[] = {
+    5, 5, 0,
+    0, 5, 5,
+    0, 0, 0};
+
+uint8_t TETROMINO_6[] = {
+    6, 0, 0,
+    6, 6, 6,
+    0, 0, 0};
+
+uint8_t TETROMINO_7[] = {
+    0, 0, 7,
+    7, 7, 7,
+    0, 0, 0};
+
+uint8_t TETROMINO_8[] = {
+    8};
+
+uint8_t TETROMINO_9[] = {
+    9};
+
+struct tetromino {
+    uint8_t *data;
+    uint8_t length;
 };
+
+struct tetromino TETROMINOS[] = {
+    {TETROMINO_1, 4}, // misschien de lengte met een functie berekenen?
+    {TETROMINO_2, 2},
+    {TETROMINO_3, 3},
+    {TETROMINO_4, 3},
+    {TETROMINO_5, 3},
+    {TETROMINO_6, 3},
+    {TETROMINO_7, 3},
+    {TETROMINO_8, 1},
+    {TETROMINO_9, 1}};
+
+struct tetromino_state {
+    uint8_t id;
+    uint8_t tetromino_index;
+    int offset_row;
+    int offset_col;
+    uint8_t rotation;
+};
+
+struct game_state {
+    uint8_t board[FIELD_WIDTH * FIELD_HEIGHT];
+    uint8_t lines[FIELD_HEIGHT];
+
+    uint8_t SPEED = 30;
+    uint8_t speed_counter = 0;
+    uint8_t move_down;
+    uint8_t current_id = 0;
+    boolean bomb_active = 0;
+    boolean bomb_handled = 0;
+
+    struct tetromino_state tetromino_state;
+
+    struct timed_block timed_block;
+
+    int score;
+    boolean game_over;
+};
+
+/*
+uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tetromino_y)
+{
+    for (uint8_t block_x = 0; block_x < (4 - 3 * bomb_active); block_x++)
+        for (uint8_t block_y = 0; block_y < (4 - 3 * bomb_active); block_y++)
+        {
+            uint8_t rotated_piece_index = rotate(block_x, block_y, rotation);
+            uint8_t field_index = (tetromino_y + block_y) * FIELD_WIDTH + (tetromino_x + block_x);
+
+            uint8_t current_block = tetrominos[tetromino][rotated_piece_index];
+            if (tetromino_x + block_x >= 0 && tetromino_x + block_x < FIELD_WIDTH)
+            {
+                if (tetromino_y + block_y >= 0 && tetromino_y + block_y < FIELD_HEIGHT)
+                {
+                    if (current_block != 0 && field[field_index].id)
+                    {
+                        if (bomb_active)
+                            explode();
+                        return 0;
+                    }
+                }
+                else if (current_block != 0)
+                {
+                    if (bomb_active)
+                        explode();
+                    return 0;
+                }
+            }
+            else if (current_block != 0)
+            {
+                return 0;
+            }
+        }
+
+    return 1;
+}
+*/
+
+/*
+uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tetromino_y)
+{
+    for (uint8_t block_x = 0; block_x < (4 - 3 * bomb_active); block_x++)
+        for (uint8_t block_y = 0; block_y < (4 - 3 * bomb_active); block_y++)
+        {
+            uint8_t rotated_piece_index = rotate(block_x, block_y, rotation);
+            uint8_t field_index = (tetromino_y + block_y) * FIELD_WIDTH + (tetromino_x + block_x);
+
+            uint8_t current_block = tetrominos[tetromino][rotated_piece_index];
+            if (tetromino_x + block_x >= 0 && tetromino_x + block_x < FIELD_WIDTH)
+            {
+                if (tetromino_y + block_y >= 0 && tetromino_y + block_y < FIELD_HEIGHT)
+                {
+                    if (current_block != 0 && field[field_index].id)
+                    {
+                        if (bomb_active)
+                            explode();
+                        return 0;
+                    }
+                }
+                else if (current_block != 0)
+                {
+                    if (bomb_active)
+                        explode();
+                    return 0;
+                }
+            }
+            else if (current_block != 0)
+            {
+                return 0;
+            }
+        }
+
+    return 1;
+}
+*/
+
+// de argumenten van deze functie algemener maken!!!
+boolean piece_fits(struct tetromino_state tetromino_state, struct game_state *game_state, uint8_t width, uint8_t height) {
+
+    struct tetromino *tetromino = TETROMINOS + game_state->tetromino_state.tetromino_index;
+
+    for (int row = 0;
+         row < tetromino->length;
+         ++row) {
+        for (int col = 0;
+             col < tetromino->length;
+             ++col) {
+            uint8_t tetromino_value = tetromino_get(tetromino, row, col, tetromino_state.rotation);
+            if (tetromino_value > 0) {
+                int board_row = tetromino_state.offset_row + row;
+                int board_col = tetromino_state.offset_col + col;
+                uint8_t field_value = board_get(game_state->board, FIELD_WIDTH, board_row, board_col);
+                if (board_col >= 0 && board_col < FIELD_WIDTH) {
+                    if (board_row >= 0 && board_row < FIELD_HEIGHT) {
+                        if (field_value) {
+                            if (game_state->bomb_active && !game_state->bomb_handled) {
+                                explode(game_state, game_state->tetromino_state.offset_col, game_state->tetromino_state.offset_row);
+                            }
+                            return false;
+                        }
+                    } else if (game_state->bomb_active && !game_state->bomb_handled) {
+                        explode(game_state, game_state->tetromino_state.offset_col, game_state->tetromino_state.offset_row); // - 1 to revert position
+                        return false;
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+uint8_t tetromino_get(struct tetromino *tetromino, int row, int col, uint8_t rotation) {
+    uint8_t length = tetromino->length;
+    switch (rotation) {
+    case 0:
+        return tetromino->data[row * length + col];
+    case 1:
+        return tetromino->data[(length - col - 1) * length + row];
+    case 2:
+        return tetromino->data[(length - row - 1) * length + (length - col - 1)];
+    case 3:
+        return tetromino->data[col * length + (length - row - 1)];
+    }
+}
+
+void install_tetromino_in_field(struct game_state *game) {
+    struct tetromino *tetromino = TETROMINOS + game->tetromino_state.tetromino_index;
+    for (uint8_t row = 0;
+         row < tetromino->length;
+         ++row) {
+        for (uint8_t col = 0;
+             col < tetromino->length;
+             ++col) {
+            uint8_t value = tetromino_get(tetromino, row, col, game->tetromino_state.rotation);
+            if (value) {
+                int board_row = game->tetromino_state.offset_row + row;
+                int board_col = game->tetromino_state.offset_col + col;
+                board_set(game->board, FIELD_WIDTH, board_row, board_col, value);
+            }
+        }
+    }
+}
+
+void move_position(struct game_state *game_state, float acc_x, float acc_y) {
+    tetromino_state tetromino = game_state->tetromino_state;
+    if (acc_x > MIN_TILT) {
+        tetromino.offset_col -= 1;
+        delay(100);
+    } else if (acc_x < -MIN_TILT) {
+        tetromino.offset_col += 1;
+        delay(100);
+    }
+    if (acc_y > 0.95) {
+        game_state->speed_counter = game_state->speed_counter + 10;
+    } else if (acc_y < -0.50) {
+        if (game_state->speed_counter > 0) {
+            game_state->speed_counter--;
+        }
+    }
+
+    if (M5.BtnA.wasPressed()) {
+        tetromino.rotation = (tetromino.rotation + 1) % 4;
+    }
+
+    if (piece_fits(tetromino, game_state, FIELD_WIDTH, FIELD_HEIGHT)) {
+        game_state->tetromino_state = tetromino;
+    }
+}
 
 uint32_t black_color = M5.Lcd.color565(0, 0, 0);
 uint32_t purple_color = M5.Lcd.color565(128, 0, 128);
@@ -206,7 +383,7 @@ uint32_t give_color(uint8_t n) {
         color = black_color;
         break;
     case 1:
-        color = red_color;
+        color = TFT_BLUE;
         break;
     case 2:
         color = green_color;
@@ -229,133 +406,48 @@ uint32_t give_color(uint8_t n) {
     case 8:
         color = TFT_DARKGREY;
         break;
+    case 9:
+        color = TFT_RED;
+        break;
     }
     return color;
 }
 
-uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tetromino_y) {
-    for (uint8_t block_x = 0; block_x < (4 - 3 * bomb_active); block_x++)
-        for (uint8_t block_y = 0; block_y < (4 - 3 * bomb_active); block_y++) {
-            uint8_t rotated_piece_index = rotate(block_x, block_y, rotation);
-            uint8_t field_index = (tetromino_y + block_y) * FIELD_WIDTH + (tetromino_x + block_x);
-
-            uint8_t current_block = tetrominos[tetromino][rotated_piece_index];
-            if (tetromino_x + block_x >= 0 && tetromino_x + block_x < FIELD_WIDTH) {
-                if (tetromino_y + block_y >= 0 && tetromino_y + block_y < FIELD_HEIGHT) {
-                    if (current_block != 0 && field[field_index].id) {
-                        if (bomb_active)
-                            explode();
-                        return 0;
-                    }
-                } else if (current_block != 0) {
-                    if (bomb_active)
-                        explode();
-                    return 0;
-                }
-            } else if (current_block != 0) {
-                return 0;
-            }
-        }
-
-    return 1;
+boolean possible_to_lower(struct game_state *game_state) {
+    tetromino_state tetromino = game_state->tetromino_state;
+    tetromino.offset_row += 1;
+    return (piece_fits(tetromino, game_state, FIELD_WIDTH, FIELD_HEIGHT));
 }
 
-#define MIN_TILT 0.15
-
-uint8_t SPEED = 10;
-uint8_t speed_counter = 0;
-uint8_t move_down;
-
-uint8_t current_piece = 2;
-uint8_t current_rotation = 0; // deze vier beter in een struct game_state
-int current_x = FIELD_WIDTH / 2;
-int current_y = 0;
-float acc_x = 0, acc_y = 0, acc_z = 0;
-uint8_t game_over = false;
-
-int score = 0;
-
-uint8_t current_id = 0;
-
-uint8_t generate_id(void) {
-    current_id++;
-    return current_id;
-}
-
-boolean is_line_full(int current_y, uint8_t block_y) {
-    uint8_t line_full = 1;
-    for (int block_x = 1; block_x < FIELD_WIDTH; block_x++) {
-        if (!field[(current_y + block_y) * FIELD_WIDTH + block_x].id) {
-            line_full = 0;
-        }
-    }
-    return line_full;
-}
-
-void clear_line(int current_y, uint8_t block_y) {
-    for (uint8_t block_x = 0; block_x < FIELD_WIDTH; block_x++) {
-        for (int line_y = current_y + block_y; line_y >= 0; line_y--) {
-            field[line_y * FIELD_WIDTH + block_x] = field[(line_y - 1) * FIELD_WIDTH + block_x];
-        }
-        field[block_x] = empty_tetromino;
-    }
-}
-
-void install_tetromino_in_field(uint8_t current_piece, uint8_t current_rotation) {
-    uint8_t id = generate_id();
-    for (int block_x = 0; block_x < 4; block_x++)
-        for (int block_y = 0; block_y < 4; block_y++)
-            if (tetrominos[current_piece][rotate(block_x, block_y, current_rotation)] != 0) {
-                struct tetromino current_tetromino = {id, tetrominos[current_piece][rotate(block_x, block_y, current_rotation)]};
-                field[(current_y + block_y) * FIELD_WIDTH + (current_x + block_x)] = current_tetromino;
-            }
-}
-
-void handle_full_lines(int current_y) {
-    for (uint8_t block_y = 0; block_y < 4; block_y++) {
-        if (current_y + block_y < FIELD_HEIGHT) {
-            if (is_line_full(current_y, block_y)) {
-                clear_line(current_y, block_y);
-                SPEED--;
-                score += 150;
-            }
-        }
-    }
-}
-
-void bring_down(int x, int y) { // gebruik die ook in clear_line
+void bring_down(uint8_t *board, int x, int y) { // gebruik die ook in clear_line
     for (int line_y = y; line_y >= 0; line_y--) {
-        field[line_y * FIELD_WIDTH + x] = field[(line_y - 1) * FIELD_WIDTH + x];
+        board[line_y * FIELD_WIDTH + x] = board[(line_y - 1) * FIELD_WIDTH + x];
+        if (board[line_y * FIELD_WIDTH + x] == 0) {
+            return;
+        }
     }
-    field[x] = empty_tetromino;
+    board[x] = 0;
 }
 
-void move_position(int *x, int *y, float acc_x, float acc_y, uint8_t current_piece, uint8_t *current_rotation) {
-    if (acc_x > MIN_TILT) {
-        if (piece_fits(current_piece, *current_rotation, *x - 1, *y)) {
-            *x -= 1;
-            delay(50);
-        }
-    } else if (acc_x < -MIN_TILT) {
-        if (piece_fits(current_piece, *current_rotation, *x + 1, *y)) {
-            *x += 1;
-            delay(50);
-        }
-    }
+void explode(struct game_state *game_state, int bomb_x, int bomb_y) { // bomb-dingen in een aparte struct zettenen zo is pece_fits bv. ook veel generieker!!!
 
-    if (acc_y > 0.25) {
-        if (SPEED > 0) {
-            SPEED--;
-            delay(10);
-        }
-    } else if (acc_y < -0.25) {
-        // SPEED++;
-        //  delay(50);
-    }
-
-    if (M5.BtnA.wasPressed() && !bomb_active) {
-        if (piece_fits(current_piece, *current_rotation + 1, *x, *y)) {
-            (*current_rotation)++;
+    for (int off_y = -1; off_y <= 1; off_y++) {
+        for (int off_x = -1; off_x <= 1; off_x++) { // checking all the neighbours of the bomb
+            int neighbour_y = bomb_y + off_y;
+            int neighbour_x = bomb_x + off_x;
+            if ((neighbour_y < 0) || (neighbour_y >= FIELD_HEIGHT)) { // checking if we are not off the field
+                continue;
+            }
+            if ((neighbour_x < 0) || (neighbour_x >= FIELD_WIDTH)) { // checking if we are not off the field
+                continue;
+            }
+            {
+                if (game_state->board[neighbour_y * FIELD_WIDTH + neighbour_x] == 9) { // voor zo'n dingen moet je de get_board gebruiken!!!
+                    game_state->timed_block.active = false;
+                }
+                bring_down(game_state->board, neighbour_x, neighbour_y);
+                game_state->bomb_handled = true;
+            }
         }
     }
 }
@@ -371,6 +463,150 @@ void setup() {
     Serial.flush();
 }
 
+uint8_t random_int(uint8_t min, uint8_t max) {
+    uint8_t range = max - min;
+    return min + rand() % range;
+}
+
+#define ARRAY_COUNT(x) (sizeof(x) / sizeof((x)[0]))
+
+void spawn_piece(struct game_state *game) {
+    game->current_id++;
+    game->tetromino_state.tetromino_index = 1;     // (uint8_t)random_int(0, ARRAY_COUNT(TETROMINOS))
+    if ((game->current_id % 5) == 0) {             // counter verhogen
+        game->tetromino_state.tetromino_index = 7; // ECHT random maken!
+        game->bomb_active = true;
+    }
+    if (((game->current_id % 2) == 0) && !game->bomb_active && !game->timed_block.active) { // counter verhogen
+        game->tetromino_state.tetromino_index = 8;                                          // CONSTANTEN WEGWERKEN!
+        game->timed_block.active = true;
+        game->timed_block.limit = 4;
+    }
+    if (game->timed_block.active) {
+        if (!(game->timed_block.limit)) {
+            game->game_over = true;
+        }
+        game->timed_block.limit--;
+    }
+    game->tetromino_state.offset_row = 0;
+    game->tetromino_state.offset_col = FIELD_WIDTH / 2;
+    game->tetromino_state.rotation = 0;
+    game->SPEED = 30;
+}
+
+boolean is_line_full(uint8_t *board, int y) {
+    uint8_t line_full = 1;
+    for (int block_x = 1; block_x < FIELD_WIDTH; block_x++) {
+        if (!board[y * FIELD_WIDTH + block_x]) {
+            line_full = 0;
+        }
+    }
+    return line_full;
+}
+
+// hier ook bring_down gebruiken!!!
+void clear_line(game_state *game_state, int y) {
+    for (uint8_t line_x = 0; line_x < FIELD_WIDTH; line_x++) {
+        for (int line_y = y; line_y >= 0; line_y--) {
+            if ((line_y == y) && (game_state->board[line_y * FIELD_WIDTH + line_x] == 8)) {
+                game_state->timed_block.active = false;
+            }
+            game_state->board[line_y * FIELD_WIDTH + line_x] = game_state->board[(line_y - 1) * FIELD_WIDTH + line_x];
+            if (game_state->board[line_y * FIELD_WIDTH + line_x] == 0) {
+            return;
+            }
+        }
+        game_state->board[line_x] = 0;
+    }
+}
+
+void handle_full_lines(struct game_state *game_state) {
+    for (uint8_t block_y = 0; block_y < 4; block_y++) {
+        if (game_state->tetromino_state.offset_row + block_y < FIELD_HEIGHT) {
+            if (is_line_full(game_state->board, game_state->tetromino_state.offset_row + block_y)) {
+                clear_line(game_state, game_state->tetromino_state.offset_row + block_y);
+                game_state->SPEED--;
+                game_state->score += 150;
+            }
+        }
+    }
+}
+
+#define ZERO_STRUCT(obj) memset(&(obj), 0, sizeof(obj))
+
+void loop() {
+    srand(time(NULL));
+    M5.update(); // moet er gewoon standard staan
+    delay(20);
+
+    struct game_state game_state;
+
+    ZERO_STRUCT(game_state);
+    spawn_piece(&game_state);
+
+    while (!game_state.game_over) {
+        M5.update(); // moet er gewoon standard staan
+        delay(10);
+        M5.Imu.getAccelData(&acc_x, &acc_y, &acc_z);
+        move_position(&game_state, acc_x, acc_y);
+        game_state.speed_counter++;
+        if (game_state.speed_counter > game_state.SPEED) {
+            game_state.move_down = 1;
+        }
+
+        if (game_state.move_down) {
+            game_state.move_down = 0;
+            game_state.speed_counter = 0;
+            if (game_state.bomb_active) {
+                if (game_state.bomb_handled) {
+                    spawn_piece(&game_state);
+                    game_state.bomb_active = false;
+                    game_state.bomb_handled = false;
+                } else if (possible_to_lower(&game_state)) {
+                    game_state.tetromino_state.offset_row++;
+                }
+            } else if (possible_to_lower(&game_state)) {
+                game_state.tetromino_state.offset_row++;
+            } else {
+
+                if (!piece_fits(game_state.tetromino_state, &game_state, FIELD_WIDTH, FIELD_HEIGHT)) {
+                    game_state.game_over = true;
+                    break;
+                }
+                install_tetromino_in_field(&game_state);
+                handle_full_lines(&game_state);
+
+                game_state.score += 12;
+                spawn_piece(&game_state);
+
+                /*
+                if ((game_state.current_id % 2) == 0) { // counter verhogen
+                    game_state.tetromino_state.tetromino_index = 7;
+                    game_state.bomb_active = true;
+                }
+                */
+            }
+        }
+
+        // Draw Field
+        for (uint8_t x = 0; x < FIELD_WIDTH; x++)
+            for (uint8_t y = 0; y < FIELD_HEIGHT; y++)
+                M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(game_state.board[y * FIELD_WIDTH + x]));
+
+        // Draw Current Piece
+        struct tetromino *tetromino = TETROMINOS + game_state.tetromino_state.tetromino_index;
+        for (uint8_t block_x = 0; block_x < tetromino->length; block_x++)
+            for (uint8_t block_y = 0; block_y < tetromino->length; block_y++) {
+                uint8_t value = tetromino_get(tetromino, block_y, block_x, game_state.tetromino_state.rotation);
+                if (value) // binnen 1 piece geen 2D array, je houdt wel een 2D array bij van pieces
+                {
+                    M5.Lcd.fillRect((game_state.tetromino_state.offset_col + block_x) * 8, (game_state.tetromino_state.offset_row + block_y) * 8, 8, 8, give_color(value));
+                }
+            }
+    }
+}
+
+/*
 void explode() {
 
     for (int off_y = -1; off_y <= 1; off_y++) {
@@ -391,22 +627,17 @@ void explode() {
         }
     }
 }
+*/
 
-void loop() {
-    srand(time(NULL));
-    M5.update(); // moet er gewoon standard staan
+/*
     delay(20);
     SPEED = 30;
     score = 0;
-    current_piece = rand() % 7;
-    current_rotation = 0; // deze vier beter in een struct game_state
-    current_x = FIELD_WIDTH / 2;
-    current_y = 0;
     game_over = 0;
 
     for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
         for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
-            field[y * FIELD_WIDTH + x] = empty_tetromino;
+            field[y * FIELD_WIDTH + x] = 0;
         }
     }
 
@@ -493,7 +724,144 @@ void loop() {
             break;
         }
     }
+    */
+
+/*
+boolean is_line_full(int current_y, uint8_t block_y) {
+    uint8_t line_full = 1;
+    for (int block_x = 1; block_x < FIELD_WIDTH; block_x++) {
+        if (!field[(current_y + block_y) * FIELD_WIDTH + block_x].id) {
+            line_full = 0;
+        }
+    }
+    return line_full;
 }
+
+void clear_line(int current_y, uint8_t block_y) {
+    for (uint8_t block_x = 0; block_x < FIELD_WIDTH; block_x++) {
+        for (int line_y = current_y + block_y; line_y >= 0; line_y--) {
+            field[line_y * FIELD_WIDTH + block_x] = field[(line_y - 1) * FIELD_WIDTH + block_x];
+        }
+        field[block_x] = empty_tetromino;
+    }
+}
+*/
+
+/*
+void install_tetromino_in_field(uint8_t current_piece, uint8_t current_rotation) {
+    uint8_t id = generate_id();
+    for (int block_x = 0; block_x < 4; block_x++)
+        for (int block_y = 0; block_y < 4; block_y++)
+            if (tetrominos[current_piece][rotate(block_x, block_y, current_rotation)] != 0) {
+                struct tetromino current_tetromino = {id, tetrominos[current_piece][rotate(block_x, block_y, current_rotation)]};
+                field[(current_y + block_y) * FIELD_WIDTH + (current_x + block_x)] = current_tetromino;
+            }
+}
+*/
+
+/*
+void handle_full_lines(int current_y) {
+    for (uint8_t block_y = 0; block_y < 4; block_y++) {
+        if (current_y + block_y < FIELD_HEIGHT) {
+            if (is_line_full(current_y, block_y)) {
+                clear_line(current_y, block_y);
+                SPEED--;
+                score += 150;
+            }
+        }
+    }
+}
+
+void bring_down(int x, int y) { // gebruik die ook in clear_line
+    for (int line_y = y; line_y >= 0; line_y--) {
+        field[line_y * FIELD_WIDTH + x] = field[(line_y - 1) * FIELD_WIDTH + x];
+    }
+    field[x] = empty_tetromino;
+}
+*/
+
+/*
+// 0 = > 0 degrees 1 = > 90 degrees 2 = > 180 degrees 3 = > 270 degrees
+uint8_t rotate(uint8_t x, uint8_t y, uint8_t rotation) // returns: which index in the rotated one relative to the original
+{
+    uint8_t rotated_index = 0;
+    switch (rotation % 4)
+    {
+    case 0:
+        rotated_index = y * 4 + x;
+        break;
+        // 0  1  2  3
+        // 4  5  6  7
+        // 8  9 10 11
+        // 12 13 14 15
+
+    case 1:
+        rotated_index = 12 + y - (x * 4);
+        break;
+        // 12  8  4  0
+        //  13  9  5  1
+        //  14 10  6  2
+        //  15 11  7  3
+
+    case 2:
+        rotated_index = 15 - (y * 4) - x;
+        break;
+        // 15 14 13 12
+        //  11 10  9  8
+        //  7  6  5  4
+        //  3  2  1  0
+
+    case 3:
+        rotated_index = 3 - y + (x * 4);
+        break;
+        // 3  7 11 15
+        // 2  6 10 14
+        // 1  5  9 13
+        // 0  4  8 12
+    }
+    return rotated_index;
+}
+*/
+
+/*
+uint8_t piece_fits(uint8_t tetromino, uint8_t rotation, int tetromino_x, int tetromino_y)
+{
+    for (uint8_t block_x = 0; block_x < (4 - 3 * bomb_active); block_x++)
+        for (uint8_t block_y = 0; block_y < (4 - 3 * bomb_active); block_y++)
+        {
+            uint8_t rotated_piece_index = rotate(block_x, block_y, rotation);
+            uint8_t field_index = (tetromino_y + block_y) * FIELD_WIDTH + (tetromino_x + block_x);
+
+            uint8_t current_block = tetrominos[tetromino][rotated_piece_index];
+            if (tetromino_x + block_x >= 0 && tetromino_x + block_x < FIELD_WIDTH)
+            {
+                if (tetromino_y + block_y >= 0 && tetromino_y + block_y < FIELD_HEIGHT)
+                {
+                    if (current_block != 0 && field[field_index].id)
+                    {
+                        if (bomb_active)
+                            explode();
+                        return 0;
+                    }
+                }
+                else if (current_block != 0)
+                {
+                    if (bomb_active)
+                        explode();
+                    return 0;
+                }
+            }
+            else if (current_block != 0)
+            {
+                return 0;
+            }
+        }
+
+    return 1;
+}
+
+
+*/
 
 /*
   for (int i = 0; i<16; i++) {
