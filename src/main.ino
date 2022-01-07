@@ -24,6 +24,7 @@ enum game_mode {
 struct timed_block {
     uint8_t active;
     uint8_t limit;
+    uint8_t index;
 };
 
 struct bomb {
@@ -43,12 +44,12 @@ struct accelerometer_data {
 };
 
 struct saved_piece_data {
-    int id;
+    uint id;
     uint8_t color;
     uint8_t blocks_left;
 };
 
-struct tetromino {
+struct tetromino { // => gewoon index en kleur
     uint8_t *blocks;
     uint8_t length;
     uint8_t total_blocks;
@@ -60,7 +61,7 @@ struct tetromino_state {
     int row_in_field = 0;
     int column_in_field = 0;
     uint8_t rotation = 0;
-    struct tetromino *tetromino;
+    struct tetromino *tetromino; // => gewoon index en kleur
 };
 
 struct game_state {
@@ -81,7 +82,7 @@ struct game_state {
 
     struct double_node *active_pieces;
 
-    int score;
+    uint score;
     uint8_t game_over;
 };
 
@@ -125,7 +126,7 @@ Double_Node *insert_after(saved_piece_data value, Double_Node *q) {
     return p;
 }
 
-Double_Node *delete_node(int id, Double_Node *start) {
+Double_Node *delete_node(uint id, Double_Node *start) {
     Double_Node *p;
     p = start;
     while (p != NULL && (p->value.id != id)) {
@@ -409,12 +410,14 @@ void explode(struct game_state *game_state, int bomb_x, int bomb_y) { // bomb-di
     }
 }
 
+#define MEM_SIZE 512
+
 void setup() {
     M5.begin();
     M5.IMU.Init();
     Serial.begin(115200);
     Serial.flush();
-    EEPROM.begin(512);
+    EEPROM.begin(MEM_SIZE);
     M5.Lcd.fillScreen(black_color);
     Serial.begin(115200);
     Serial.flush();
@@ -444,6 +447,7 @@ void spawn_piece(struct game_state *game) {
         game->tetromino_state.tetromino = ptr;
         game->timed_block.active = 1;
         game->timed_block.limit = 100;
+        game->timed_block.index = index;
     }
     if (game->timed_block.active) {
         if (!(game->timed_block.limit)) {
@@ -464,7 +468,7 @@ void spawn_piece(struct game_state *game) {
 
 uint8_t is_line_full(double_node **board, int y) {
     uint8_t line_full = 1;
-    for (int block_x = 1; block_x < FIELD_WIDTH; block_x++) {
+    for (uint8_t block_x = 1; block_x < FIELD_WIDTH; block_x++) {
         if (board_get(board, FIELD_WIDTH, y, block_x) == NULL) {
             line_full = 0;
         }
