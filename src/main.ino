@@ -389,7 +389,7 @@ void move_position(struct game_state *game_state, accelerometer_data acceleromet
     } else if (M5.BtnB.wasPressed()) {
         load_data(game_state);
     } else {
-        if (M5.BtnA.isPressed()) {
+        if (M5.BtnA.isPressed() && !M5.BtnB.isPressed()) {
             tetromino.rotation = (tetromino.rotation + 1) % 4;
         }
         if (piece_fits(tetromino, game_state, FIELD_WIDTH, FIELD_HEIGHT)) {
