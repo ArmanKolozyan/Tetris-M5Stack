@@ -3,6 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define RANDOM_MAX 20
+#define RANDOM_LIMIT_TIMED_BLOCK 5
+#define RANDOM_LIMIT_BOMB 3
+#define TIMED_BLOCK_LIMIT 7
+#define TETROMINOS_AMOUNT 7
+
 /**
  * All the different game_modes that the player, at the beginning of a game session, can choose.
  */
@@ -481,23 +487,27 @@ uint8_t possible_to_lower(struct game_state *game_state) {
 /**
  * Does the necessary actions depending on the button(s) pressed and the tilt of the M5Stack.
  */
-void handle_input(struct game_state *game_state, accelerometer_data accelerometer_data) {
+uint8_t handle_input(struct game_state *game_state, accelerometer_data accelerometer_data) {
+    uint8_t change = 0;
 
     if (M5.BtnA.wasPressed() && M5.BtnB.wasPressed()) {
         write_data(game_state);
+        return 0;
 
     } else if (M5.BtnB.wasPressed()) {
         load_data(game_state);
-
+        return 0;
     } else {
         tetromino_state tetromino = game_state->tetromino_state;
 
         if (accelerometer_data.x > ACC_MIN_LEFT) {
             tetromino.column_in_field--;
+            change = 1;
             delay(100);
 
         } else if (accelerometer_data.x < ACC_MIN_RIGHT) {
             tetromino.column_in_field++;
+            change = 1;
             delay(100);
         }
 
@@ -512,17 +522,41 @@ void handle_input(struct game_state *game_state, accelerometer_data acceleromete
 
         if (M5.BtnA.wasPressed() && !M5.BtnB.wasPressed()) {
             tetromino.rotation = (tetromino.rotation + 1) % 4;
+            change = 1;
         }
 
         uint8_t piece_orientation = piece_fits(tetromino, game_state, FIELD_WIDTH, FIELD_HEIGHT);
 
-        if (piece_orientation == CAN_MOVE) {
+        if (change && (piece_orientation == CAN_MOVE)) {
             game_state->tetromino_state = tetromino;
+            return 1;
         } else if (game_state->bomb.active && !(piece_orientation == OUTSIDE_WIDTH)) {
             explode(game_state, game_state->tetromino_state.column_in_field, game_state->tetromino_state.row_in_field);
             spawn_piece(game_state);
+            return 1;
+        } else {
+            return 0;
         }
     }
+}
+
+uint8_t *copyArray(uint8_t *src, uint8_t length) {
+    uint8_t *p = (uint8_t *)malloc(length * sizeof(uint8_t));
+    memcpy(p, src, length * sizeof(uint8_t));
+    return p;
+}
+
+void make_timed_block(struct game_state *game, uint8_t index) {
+    tetromino *ptr = (tetromino *)malloc(sizeof(struct tetromino)); // dynamically allocated to change the color
+    ptr->length = game->tetromino_state.tetromino->length;
+    ptr->blocks_amount = game->tetromino_state.tetromino->blocks_amount;
+    ptr->blocks = copyArray(game->tetromino_state.tetromino->blocks, game->tetromino_state.tetromino->length * game->tetromino_state.tetromino->length);
+    change_color(ptr->blocks, ptr->length, 9);
+    Serial.printf("changed");
+    game->tetromino_state.tetromino = ptr;
+    game->timed_block.active = 1;
+    game->timed_block.limit = TIMED_BLOCK_LIMIT;
+    game->timed_block.index = index;
 }
 
 /**
@@ -583,29 +617,39 @@ void write_data(struct game_state *game_state) {
     uint8_t encoded_3;
 
     while (field_pieces != NULL) {
-        // Another programmer could introduce many more colors, but in my case there are only 9 different colors. => 4 bits
-        // A tetromino could contain a maximum of 4 blocks. => 3 bits
+        // Another programmer could introduce many more colors, but in my case there are only 9 different colors. -> 4 bits
+        // A tetromino could contain a maximum of 4 blocks. -> 3 bits
         shifted_color = field_pieces->value.color << 3;
         shifted_blocks_left = field_pieces->value.blocks_left;
         encoded_3 = shifted_color | shifted_blocks_left;
         EEPROM.writeByte(address, encoded_3);
         address++;
-        for (uint8_t i = 0; i < field_pieces->value.free_index; i++) {
+        for (uint8_t i = 0; i < field_pieces->value.free_index; i += 2) {
+            // column can be between 0 and 9 -> 4 bits
+            // row can be between 0 and 19 -> 5 bits
+            // combining them would save memory, but that is not trvial in this case and the computational overhead would domen
             EEPROM.writeByte(address, field_pieces->value.positions[i]);
-            Serial.printf("points sending: %u \n", field_pieces->value.positions[i]);
+            address++;
+            EEPROM.writeByte(address, field_pieces->value.positions[i + 1]);
             address++;
         }
         field_pieces = field_pieces->next;
     }
 
     // current tetromino
-    EEPROM.writeByte(address, determine_color(game_state->tetromino_state.tetromino->blocks, game_state->tetromino_state.tetromino->length));
+
+    // 9 different colors -> 4 bits
+    // column can be between 0 and 9 -> 4 bits, together 1 byte
+    uint8_t shifted_current_color = determine_color(game_state->tetromino_state.tetromino->blocks, game_state->tetromino_state.tetromino->length) << 4;
+    uint8_t encoded_4 = shifted_current_color | (uint8_t)game_state->tetromino_state.column_in_field;
+    EEPROM.writeByte(address, encoded_4);
     address++;
-    EEPROM.writeByte(address, (uint8_t)game_state->tetromino_state.column_in_field);
-    address++;
-    EEPROM.writeByte(address, (uint8_t)game_state->tetromino_state.row_in_field);
-    address++;
-    EEPROM.writeByte(address, game_state->tetromino_state.rotation);
+
+    // row can be between 0 and 19 -> 5 bits
+    // rotation can be between 0 and 3 -> 2 bits, together 7 bits
+    uint8_t shifted_current_row = (uint8_t)game_state->tetromino_state.row_in_field << 3;
+    uint8_t encoded_5 = shifted_current_row | game_state->tetromino_state.rotation;
+    EEPROM.writeByte(address, encoded_5);
     address++;
 
     // score
@@ -625,8 +669,8 @@ void load_data(struct game_state *game_state) {
     uint8_t encoded_1 = EEPROM.readByte(address);
     address++;
     uint8_t bitmask_game_mode = 0b11000000;
-    uint8_t shifted_game_mode_encoded = encoded_1 & bitmask_game_mode;
-    switch (shifted_game_mode_encoded >> 6) {
+    uint8_t shifted_game_mode = encoded_1 & bitmask_game_mode;
+    switch (shifted_game_mode >> 6) {
     case 1:
         game_state->game_mode = mines_and_timed_blocks;
     case 2:
@@ -638,33 +682,32 @@ void load_data(struct game_state *game_state) {
     }
 
     uint8_t bitmask_game_over = 0b00100000;
-    uint8_t shifted_game_over_encoded = encoded_1 & bitmask_game_over;
-    game_state->game_over = shifted_game_over_encoded >> 5;
+    uint8_t shifted_game_over = encoded_1 & bitmask_game_over;
+    game_state->game_over = shifted_game_over >> 5;
 
     uint8_t bitmask_bomb_active = 0b00010000;
-    uint8_t shifted_bomb_active_encoded = encoded_1 & bitmask_bomb_active;
-    game_state->bomb.active = shifted_bomb_active_encoded >> 4;
+    uint8_t shifted_bomb_active = encoded_1 & bitmask_bomb_active;
+    game_state->bomb.active = shifted_bomb_active >> 4;
 
     uint8_t bitmask_timed_block_active = 0b00001000;
-    uint8_t shifted_timed_block_active_encoded = encoded_1 & bitmask_timed_block_active;
-    game_state->timed_block.active = shifted_timed_block_active_encoded >> 3;
+    uint8_t shifted_timed_block_active = encoded_1 & bitmask_timed_block_active;
+    game_state->timed_block.active = shifted_timed_block_active >> 3;
 
     uint8_t bitmask_timed_block_index = 0b00000111;
-    uint8_t shifted_timed_block_index_encoded = encoded_1 & bitmask_timed_block_index;
-    game_state->timed_block.index = shifted_timed_block_index_encoded;
+    uint8_t shifted_timed_block_index = encoded_1 & bitmask_timed_block_index;
+    game_state->timed_block.index = shifted_timed_block_index;
 
     //(timed_block &) speed
 
     uint8_t encoded_2 = EEPROM.readByte(address);
     address++;
     uint8_t bitmask_timed_block_limit = 0b11100000;
-    uint8_t shifted_timed_block_limit_encoded = encoded_2 & bitmask_timed_block_limit;
-    game_state->timed_block.limit = shifted_timed_block_limit_encoded >> 5;
+    uint8_t shifted_timed_block_limit = encoded_2 & bitmask_timed_block_limit;
+    game_state->timed_block.limit = shifted_timed_block_limit >> 5;
 
     uint8_t bitmask_speed_counter = 0b00011111;
-    uint8_t shifted_speed_counter_encoded = encoded_2 & bitmask_speed_counter;
-    game_state->speed.counter = shifted_speed_counter_encoded;
-    Serial.printf("decoded: %u\n", encoded_2);
+    uint8_t shifted_speed_counter = encoded_2 & bitmask_speed_counter;
+    game_state->speed.counter = shifted_speed_counter;
 
     game_state->speed.limit = EEPROM.readByte(address);
     address++;
@@ -680,36 +723,22 @@ void load_data(struct game_state *game_state) {
     }
     uint8_t counter = EEPROM.readByte(address);
     address++;
-    Serial.printf("amount receiving: %u\n", counter);
     game_state->active_pieces = NULL;
     game_state->current_id = 1;
 
-    uint8_t bitmask_timed_block_active = 0b00001000;
-    uint8_t shifted_timed_block_active_encoded = encoded_1 & bitmask_timed_block_active;
-    game_state->timed_block.active = shifted_timed_block_active_encoded >> 3;
-
     uint8_t encoded_3;
-    address++;
     uint8_t bitmask_color = 0b01111000;
-    uint8_t shifted_color;
     uint8_t bitmask_blocks_left = 0b00000111;
-    uint8_t shifted_blocks_left;
+    uint8_t shifted_color;
     uint8_t color;
     uint8_t blocks_left;
 
-    shifted_color = field_pieces->value.color << 3;
-    shifted_blocks_left = field_pieces->value.blocks_left;
-    encoded_3 = shifted_color | shifted_blocks_left;
-    EEPROM.writeByte(address, encoded_3);
-
     for (uint8_t i = counter; i > 0; i--) {
         encoded_3 = EEPROM.readByte(address);
-        shifted_color = encoded_3 & bitmask_color;
-        shifted_blocks_left = encoded_3 & bitmask_blocks_left;
-         color = shifted_color >> shifted_blocks_left;
-        blocks_left = shifted;
-        Serial.printf("blocks receiving: %i\n", blocks_left);
         address++;
+        shifted_color = encoded_3 & bitmask_color;
+        color = shifted_color >> 3;
+        blocks_left = encoded_3 & bitmask_blocks_left;
         struct installed_piece_data value = create_installed_piece(game_state->current_id, color, blocks_left);
         game_state->active_pieces = insert_before(value, game_state->active_pieces);
         game_state->current_id++;
@@ -727,19 +756,34 @@ void load_data(struct game_state *game_state) {
     }
 
     // current tetromino
-    uint8_t color = EEPROM.readByte(address);
-    if (color != 9) {
-        game_state->tetromino_state.tetromino = &TETROMINOS[color - 1];
-    } else {
-        game_state->tetromino_state.tetromino = &TETROMINOS[game_state->timed_block.index];
+
+    if ((determine_color(game_state->tetromino_state.tetromino->blocks, game_state->tetromino_state.tetromino->length)) == 9) {
+        free(game_state->tetromino_state.tetromino->blocks);
+        free(game_state->tetromino_state.tetromino);
     }
+
+    uint8_t encoded_4 = EEPROM.readByte(address);
     address++;
-    game_state->tetromino_state.column_in_field = (short)EEPROM.readByte(address);
+    uint8_t bitmask_current_color = 0b11110000;
+    uint8_t shifted_current_color = encoded_4 & bitmask_current_color;
+    uint8_t current_color = shifted_current_color >> 4;
+
+    if (current_color == 9) {
+        make_timed_block(game_state, game_state->timed_block.index);
+    } else {
+        game_state->tetromino_state.tetromino = &TETROMINOS[current_color - 1];
+    }
+
+    uint8_t bitmask_current_column = 0b00001111;
+    game_state->tetromino_state.column_in_field = encoded_4 & bitmask_current_column;
+
+    uint8_t encoded_5 = EEPROM.readByte(address);
     address++;
-    game_state->tetromino_state.row_in_field = (short)EEPROM.readByte(address);
-    address++;
-    game_state->tetromino_state.rotation = EEPROM.readByte(address);
-    address++;
+    uint8_t bitmask_current_row = 0b11111000;
+    uint8_t shifted_current_row = encoded_5 & bitmask_current_row;
+    game_state->tetromino_state.row_in_field = shifted_current_row >> 3;
+    uint8_t bitmask_current_rotation = 0b00000011;
+    game_state->tetromino_state.rotation = encoded_5 & bitmask_current_rotation;
 
     // score
     game_state->score = EEPROM.readUInt(address);
@@ -893,17 +937,6 @@ void setup() {
 uint8_t generate_random_value(uint8_t max) {
     return rand() % max;
 }
-#define RANDOM_MAX 20
-#define RANDOM_LIMIT_TIMED_BLOCK 5
-#define RANDOM_LIMIT_BOMB 3
-#define TIMED_BLOCK_LIMIT 7
-#define TETROMINOS_AMOUNT 7
-
-uint8_t *copyArray(uint8_t *src, uint8_t length) {
-    uint8_t *p = (uint8_t *)malloc(length * sizeof(uint8_t));
-    memcpy(p, src, length * sizeof(uint8_t));
-    return p;
-}
 
 /**
  * Creates a random tetromino. Every so often, special tetrominos are generated, namely: mines, which can be used to blow up its 8 surrounding blocks, and
@@ -914,21 +947,12 @@ void spawn_piece(struct game_state *game) {
     game->current_id++;
     uint8_t index = generate_random_value(TETROMINOS_AMOUNT);
     game->tetromino_state.tetromino = &TETROMINOS[index];
-    if (generate_random_value(RANDOM_MAX) < RANDOM_LIMIT_BOMB) {
+    if ((generate_random_value(RANDOM_MAX) < RANDOM_LIMIT_BOMB) && ((game->game_mode == mines_and_timed_blocks) || (game->game_mode == mines_only))) {
         game->tetromino_state.tetromino = &TETROMINOS[7];
         game->bomb.active = 1;
     }
-    if ((generate_random_value(RANDOM_MAX) < RANDOM_LIMIT_TIMED_BLOCK) && !game->bomb.active && !game->timed_block.active) { // counter verhogen
-        Serial.printf("hello");
-        tetromino *ptr = (tetromino *)malloc(sizeof(struct tetromino)); // dynamically allocated to change the color
-        ptr->length = game->tetromino_state.tetromino->length;
-        ptr->blocks_amount = game->tetromino_state.tetromino->blocks_amount;
-        ptr->blocks = copyArray(game->tetromino_state.tetromino->blocks, game->tetromino_state.tetromino->length * game->tetromino_state.tetromino->length);
-        change_color(ptr->blocks, ptr->length, 9);
-        game->tetromino_state.tetromino = ptr;
-        game->timed_block.active = 1;
-        game->timed_block.limit = TIMED_BLOCK_LIMIT;
-        game->timed_block.index = index;
+    if ((generate_random_value(RANDOM_MAX) < RANDOM_LIMIT_TIMED_BLOCK) && !game->bomb.active && !game->timed_block.active && ((game->game_mode == mines_and_timed_blocks) || (game->game_mode == timed_blocks_only))) { // counter verhogen
+        make_timed_block(game, index);
     } else if (game->timed_block.active) {
         if ((game->timed_block.limit) < 0) {
             game->game_over = 1;
@@ -972,20 +996,81 @@ void handle_full_lines(struct game_state *game_state) {
     }
 }
 
+void handle_menu(struct game_state *game_state) {
+    M5.update();
+    int clicks = 0;
+
+    M5.Lcd.setTextColor(TFT_DARKCYAN);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setCursor(20, 3);
+    M5.Lcd.printf("Choose"); // Pressing A = making choice, Pressing B = switching choice
+    M5.Lcd.setCursor(20, 13);
+    M5.Lcd.printf("Mode");
+    M5.Lcd.setCursor(20, 30);
+    M5.Lcd.printf("Mines &");
+    M5.Lcd.setCursor(20, 40);
+    M5.Lcd.printf("timed");
+    M5.Lcd.setCursor(20, 60);
+    M5.Lcd.printf("Mines");
+    M5.Lcd.setCursor(20, 90);
+    M5.Lcd.printf("Timed");
+    M5.Lcd.setCursor(20, 120);
+    M5.Lcd.printf("Normal");
+
+    struct tetromino *tetromino = &TETROMINOS[6];
+    for (uint8_t block_x = 0; block_x < tetromino->length; block_x++)
+        for (uint8_t block_y = 0; block_y < tetromino->length; block_y++) {
+            uint8_t value = get_component(tetromino, block_y, block_x, 0);
+            if (value) {
+                M5.Lcd.fillRect(block_x * 4, ((clicks % 4) + 1) * 30 + block_y * 4, 4, 4, TFT_BLUE);
+            }
+        }
+
+    while (!(M5.BtnA.isPressed())) {
+        M5.update();
+        if (M5.BtnB.wasPressed()) {
+            clicks++;
+            M5.Lcd.fillRect(0, 0, 19, 160, TFT_BLACK);
+            for (uint8_t block_x = 0; block_x < tetromino->length; block_x++)
+                for (uint8_t block_y = 0; block_y < tetromino->length; block_y++) {
+                    uint8_t value = get_component(tetromino, block_y, block_x, 0);
+                    if (value) {
+                        M5.Lcd.fillRect(block_x * 4, ((clicks % 4) + 1) * 30 + block_y * 4, 4, 4, TFT_BLUE);
+                    }
+                }
+        }
+    }
+    switch (clicks % 4) {
+    case 1:
+        game_state->game_mode = mines_and_timed_blocks;
+    case 2:
+        game_state->game_mode = mines_only;
+    case 3:
+        game_state->game_mode = timed_blocks_only;
+    case 4:
+        game_state->game_mode = no_mines_no_timed_blocks;
+    }
+
+    M5.Lcd.fillScreen(TFT_BLACK);
+}
+
 void loop() {
     // Since the M5Stack has no clock, the random_generator cannot be seeded with time(NULL).
     // For that reason, the accelerometer is used here to obtain a somewhat random value.
     float random_seeder;
     M5.Imu.getAccelData(&random_seeder, &random_seeder, &random_seeder);
     srand(random_seeder);
-
-    M5.update();
     struct accelerometer_data accelerometer_data;
     struct game_state game_state;
-    game_state.game_mode = mines_and_timed_blocks;
+    short old_column;
+    short old_row;
+    uint8_t moved;
 
     game_state.current_id = 0;
     game_state.timed_block.active = 0;
+
+    M5.update();
+    handle_menu(&game_state);
 
     for (uint8_t x = 0; x < FIELD_WIDTH; x++) {
         for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
@@ -999,7 +1084,9 @@ void loop() {
         M5.update(); // moet er gewoon standard staan
         delay(10);
         M5.Imu.getAccelData(&accelerometer_data.x, &accelerometer_data.y, &accelerometer_data.z);
-        handle_input(&game_state, accelerometer_data);
+        old_column = game_state.tetromino_state.column_in_field;
+        old_row = game_state.tetromino_state.row_in_field;
+        moved = handle_input(&game_state, accelerometer_data);
         game_state.speed.counter++;
 
         if (game_state.speed.counter > game_state.speed.limit) {
@@ -1014,6 +1101,7 @@ void loop() {
             } else if (possible_to_lower(&game_state)) {
                 game_state.tetromino_state.row_in_field++;
             } else {
+                game_state.speed.counter = 1;
                 if (piece_fits(game_state.tetromino_state, &game_state, FIELD_WIDTH, FIELD_HEIGHT) != CAN_MOVE) {
                     game_state.game_over = 1;
                     break;
@@ -1021,28 +1109,39 @@ void loop() {
                 install_tetromino_in_field(&game_state);
                 handle_full_lines(&game_state);
 
+                M5.Lcd.fillScreen(TFT_BLACK);
+
+                // Draw Field
+                for (uint8_t x = 0; x < FIELD_WIDTH; x++)
+                    for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
+                        if (game_state.field[y * FIELD_WIDTH + x] != NULL) {
+                            Serial.printf("doing");
+                            M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(game_state.field[y * FIELD_WIDTH + x]->value.color));
+                        } else
+                            M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(0));
+                    }
+
                 game_state.score += 12;
                 spawn_piece(&game_state);
             }
         }
-        // Draw Field
-        for (uint8_t x = 0; x < FIELD_WIDTH; x++)
-            for (uint8_t y = 0; y < FIELD_HEIGHT; y++) {
-                if (game_state.field[y * FIELD_WIDTH + x] != NULL) {
-                    M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(game_state.field[y * FIELD_WIDTH + x]->value.color));
-                } else
-                    M5.Lcd.fillRect(8 * x, 8 * y, 8, 8, give_color(0));
-            }
 
-        // Draw Current Piece
-        struct tetromino *tetromino = game_state.tetromino_state.tetromino;
-        for (uint8_t block_x = 0; block_x < tetromino->length; block_x++)
-            for (uint8_t block_y = 0; block_y < tetromino->length; block_y++) {
-                uint8_t value = get_component(tetromino, block_y, block_x, game_state.tetromino_state.rotation);
-                if (value) // binnen 1 piece geen 2D array, je houdt wel een 2D array bij van pieces
-                {
-                    M5.Lcd.fillRect((game_state.tetromino_state.column_in_field + block_x) * 8, (game_state.tetromino_state.row_in_field + block_y) * 8, 8, 8, give_color(value));
+        if ((game_state.speed.counter == 0) || moved) {
+            moved = 0;
+            struct tetromino *tetromino = game_state.tetromino_state.tetromino;
+            for (short block_x = 0; block_x < tetromino->length; block_x++)
+                for (short block_y = 0; block_y < tetromino->length; block_y++) {
+                    M5.Lcd.fillRect((old_column + block_x) * 8, (old_row + block_y) * 8, 8, 8, TFT_BLACK);
                 }
-            }
+
+            // Draw Current Piece
+            for (uint8_t block_x = 0; block_x < tetromino->length; block_x++)
+                for (uint8_t block_y = 0; block_y < tetromino->length; block_y++) {
+                    uint8_t value = get_component(tetromino, block_y, block_x, game_state.tetromino_state.rotation);
+                    if (value) {
+                        M5.Lcd.fillRect((game_state.tetromino_state.column_in_field + block_x) * 8, (game_state.tetromino_state.row_in_field + block_y) * 8, 8, 8, give_color(value));
+                    }
+                }
+        }
     }
 }
