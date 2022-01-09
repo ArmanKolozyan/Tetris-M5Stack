@@ -19,6 +19,9 @@ enum game_mode : byte {
 #define FIELD_HEIGHT 20
 #define FIELD_WIDTH 10
 #define field_SIZE FIELD_HEIGHT *FIELD_WIDTH
+#define BLOCKS_SIZE 8
+
+#define TIMED_BLOCK 9
 
 // Constants that indicate how far the player should tilt the M5Stack to send
 // the tetromino that is currently moving downward to the left/right or to
@@ -46,7 +49,7 @@ enum game_mode : byte {
  */
 struct timed_block {
     uint8_t active = 0;
-    uint8_t limit = 0;
+    short limit = 0;
     uint8_t index = 0;
 };
 
@@ -420,7 +423,7 @@ void install_tetromino_in_field(struct game_state *game) {
             }
         }
     }
-    if (determine_color(game->tetromino_state.tetromino->blocks, game->tetromino_state.tetromino->length) == 9) {
+    if (determine_color(game->tetromino_state.tetromino->blocks, game->tetromino_state.tetromino->length) == TIMED_BLOCK) {
         free(game->tetromino_state.tetromino->blocks);
         free(game->tetromino_state.tetromino);
     }
@@ -475,6 +478,9 @@ uint8_t possible_to_lower(struct tetromino_state tetromino_state, struct double_
 }
 
 #define SPEED_INCREASE 10
+
+
+#define BOMB_EXPLODED 5
 
 /**
  * Does the necessary actions depending on the button(s) pressed and the tilt of the M5Stack.
@@ -548,7 +554,7 @@ void make_timed_block(struct tetromino_state *tetromino_state, struct timed_bloc
     ptr->length = tetromino_state->tetromino->length;
     ptr->blocks_amount = tetromino_state->tetromino->blocks_amount;
     ptr->blocks = copyArray(tetromino_state->tetromino->blocks, tetromino_state->tetromino->length * tetromino_state->tetromino->length);
-    change_color(ptr->blocks, ptr->length, 9);
+    change_color(ptr->blocks, ptr->length, TIMED_BLOCK);
     tetromino_state->tetromino = ptr;
     timed_block->active = 1;
     timed_block->limit = TIMED_BLOCK_LIMIT;
@@ -756,7 +762,7 @@ void load_data(struct game_state *game_state) {
 
     // current tetromino
 
-    if ((determine_color(game_state->tetromino_state.tetromino->blocks, game_state->tetromino_state.tetromino->length)) == 9) {
+    if ((determine_color(game_state->tetromino_state.tetromino->blocks, game_state->tetromino_state.tetromino->length)) == TIMED_BLOCK) {
         free(game_state->tetromino_state.tetromino->blocks);
         free(game_state->tetromino_state.tetromino);
     }
@@ -767,7 +773,7 @@ void load_data(struct game_state *game_state) {
     uint8_t shifted_current_color = encoded_4 & bitmask_current_color;
     uint8_t current_color = shifted_current_color >> 4;
 
-    if (current_color == 9) {
+    if (current_color == TIMED_BLOCK) {
         make_timed_block(&game_state->tetromino_state, &game_state->timed_block, game_state->timed_block.index);
     } else {
         game_state->tetromino_state.tetromino = &TETROMINOS[current_color - 1];
@@ -853,7 +859,8 @@ void bring_down(struct double_node **field, short x, short y) {
     }
 }
 
-#define LINE_CLEAR_SCORE_INCREASE 50
+#define LINE_CLEAR_SCORE_INCREASE 150
+#define ALL_COMPONENTS_CLEARED_SCORE_INCRESE 40
 
 /**
  * Deletes a field block from the playing field. In case of a timed block, the dynamically allocated
@@ -863,12 +870,12 @@ void delete_component(uint *score, struct double_node *active_pieces, struct dou
                       uint8_t column, uint8_t row, uint8_t *timed_block_active) {
     if (component) { // checking if not NULL
         delete_position(&component->value, column, row);
-        if (field_get(field, row, column)->value.color == 9) {
+        if (field_get(field, row, column)->value.color == TIMED_BLOCK) {
             if (field_get(field, row, column)->value.blocks_left == 0) {
                 *timed_block_active = 0;
             }
         } else if (field_get(field, row, column)->value.blocks_left == 0) {
-            *score += LINE_CLEAR_SCORE_INCREASE;
+            *score += ALL_COMPONENTS_CLEARED_SCORE_INCRESE;
             active_pieces = delete_node(component->value.id, active_pieces);
         }
         field_set(field, row, column, NULL);
@@ -944,7 +951,7 @@ uint8_t generate_random_value(uint8_t max) {
 
 /**
  * Creates a random tetromino. Every so often, special tetrominos are generated, namely: mines, which can be used to blow up its 8 surrounding blocks, and
- * timed blocks, which must be completely removed before TIMED_BLOCK_LIMIT (10) number of tetrominos have fallen after it.
+ * timed blocks, which must be completely removed before TIMED_BLOCK_LIMIT (7) number of tetrominos have fallen after it.
  * If a timed block is active, when a tetromino is spawned, the limit is decremented until the timed_block is made inactive or the limit is lower than 0 (game_over).
  */
 void spawn_piece(struct game_state *game) {
@@ -961,12 +968,13 @@ void spawn_piece(struct game_state *game) {
         if ((game->timed_block.limit) < 0) {
             game->game_over = 1;
         }
+        Serial.printf("%i", game->timed_block.limit);
         game->timed_block.limit--;
     }
     game->tetromino_state.row_in_field = 0;
     game->tetromino_state.column_in_field = FIELD_WIDTH / 2;
     game->tetromino_state.rotation = 0;
-    game->speed.limit = 30; // test het eens door prints of het OK is
+    game->speed.limit = 30; 
 }
 
 /**
@@ -997,7 +1005,7 @@ uint8_t handle_full_lines(struct game_state *game_state) {
                 clear_line(&game_state->score, game_state->active_pieces, game_state->field, &game_state->timed_block.active,
                            game_state->tetromino_state.row_in_field + block_y);
                 game_state->speed.counter--;
-                game_state->score += 150;
+                game_state->score += LINE_CLEAR_SCORE_INCREASE;
             }
         }
     }
@@ -1138,6 +1146,7 @@ void loop() {
     M5.update();
     handle_menu(&game_state);
     spawn_piece(&game_state);
+    game_state.game_over = 0;
 
     while (!game_state.game_over) {
         M5.update();
@@ -1146,12 +1155,12 @@ void loop() {
         old_column = game_state.tetromino_state.column_in_field;
         old_row = game_state.tetromino_state.row_in_field;
         moved = handle_input(&game_state, &accelerometer_data);
-        game_state.speed.counter++;
+        game_state.speed.counter += 1 + (uint)(game_state.score / 100);
 
         if (game_state.speed.counter > 3 * game_state.speed.limit) {
             game_state.speed.counter = 0;
             if (game_state.bomb.active) {
-                if ((handle_bomb(&game_state) || (moved == 5))) {
+                if ((handle_bomb(&game_state) || (moved == BOMB_EXPLODED))) {
                     draw_field(game_state.field);
                 } 
                 lowered = 1;
@@ -1179,4 +1188,25 @@ void loop() {
             draw_current_tetromino(game_state.field,&game_state.tetromino_state, old_column, old_row);
         }
     }
+
+    if (determine_color(game_state.tetromino_state.tetromino->blocks, game_state.tetromino_state.tetromino->length) == TIMED_BLOCK) {
+        free(game_state.tetromino_state.tetromino->blocks);
+        free(game_state.tetromino_state.tetromino);
+    }
+
+    for (uint8_t row = 0; row < FIELD_HEIGHT; row++) {
+        for (uint8_t column = 0; column < FIELD_WIDTH; column++) {
+            if (game_state.field[row * FIELD_WIDTH + column] != NULL) {
+                game_state.active_pieces = delete_node(game_state.field[row * FIELD_WIDTH + column]->value.id, game_state.active_pieces);
+                game_state.field[row * FIELD_WIDTH + column] = NULL;
+            }
+        }
+    }
+
+    M5.Lcd.fillScreen(TFT_GREEN);
+    M5.Lcd.setTextColor(TFT_BLACK);
+    M5.Lcd.setCursor(10, 30);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.printf("YOUR SCORE WAS: %i", game_state.score);
+    delay(100000);
 }
